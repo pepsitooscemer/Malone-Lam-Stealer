@@ -1,7 +1,6 @@
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, AttachmentBuilder } = require('discord.js');
 const fs = require('fs');
 const https = require('https');
-const path = require('path');
 
 const TOKEN = process.env.BOT_TOKEN;
 const STATE_FILE = 'state.json';
@@ -10,10 +9,11 @@ const CORE_FILE = 'core.lua';
 // ── STATE ──────────────────────────────────────────────────────────────────────
 function loadState() {
     if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE));
-    return { webhook: '', claimer: '', min_value: 0, min_rarity: 'None' };
+    return { webhook: '', claimer: '', min_value: 0, min_rarity: 'None', whitelist: [] };
 }
 function saveState(s) { fs.writeFileSync(STATE_FILE, JSON.stringify(s, null, 2)); }
 let state = loadState();
+if (!state.whitelist) state.whitelist = [];
 
 // ── CORE SCRIPT ────────────────────────────────────────────────────────────────
 function loadCore() {
@@ -50,6 +50,12 @@ function sendWebhook(url, content) {
         req.write(body);
         req.end();
     });
+}
+
+// ── WHITELIST CHECK ────────────────────────────────────────────────────────────
+function isWhitelisted(userId) {
+    if (state.whitelist.length === 0) return true; // no whitelist = everyone can use
+    return state.whitelist.includes(userId);
 }
 
 // ── CLIENT ─────────────────────────────────────────────────────────────────────
@@ -99,6 +105,20 @@ const commands = [
     new SlashCommandBuilder()
         .setName('testwebhook')
         .setDescription('Send a test ping to the configured webhook'),
+    new SlashCommandBuilder()
+        .setName('whitelist')
+        .setDescription('Add a user to the whitelist (only whitelisted users can use the bot)')
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .addUserOption(o => o.setName('user').setDescription('User to whitelist').setRequired(true)),
+    new SlashCommandBuilder()
+        .setName('removewhitelist')
+        .setDescription('Remove a user from the whitelist')
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .addUserOption(o => o.setName('user').setDescription('User to remove').setRequired(true)),
+    new SlashCommandBuilder()
+        .setName('whitelistshow')
+        .setDescription('Show all whitelisted users')
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 ].map(c => c.toJSON());
 
 // ── REGISTER ───────────────────────────────────────────────────────────────────
@@ -113,6 +133,13 @@ client.once('ready', async () => {
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
     const { commandName } = interaction;
+    const userId = interaction.user.id;
+
+    // whitelist gate — admins always pass
+    const adminOnly = ['whitelist', 'removewhitelist', 'whitelistshow', 'createchannel'];
+    if (!adminOnly.includes(commandName) && !isWhitelisted(userId)) {
+        return interaction.reply({ content: '❌ You are not whitelisted.', ephemeral: true });
+    }
 
     if (commandName === 'setwebhook') {
         const url = interaction.options.getString('url');
@@ -138,6 +165,7 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (commandName === 'status') {
+        const wlDisplay = state.whitelist.length === 0 ? 'open (no whitelist)' : `${state.whitelist.length} user(s)`;
         const embed = new EmbedBuilder()
             .setTitle('MM2 Sniper Config')
             .setColor(0xff6b35)
@@ -146,6 +174,7 @@ client.on('interactionCreate', async interaction => {
                 { name: 'Webhook',    value: `\`${state.webhook ? 'set' : 'not set'}\``, inline: true },
                 { name: 'Min Value',  value: `\`${state.min_value}\``, inline: true },
                 { name: 'Min Rarity', value: `\`${state.min_rarity}\``, inline: true },
+                { name: 'Whitelist',  value: `\`${wlDisplay}\``, inline: true },
             );
         return interaction.reply({ embeds: [embed], ephemeral: true });
     }
@@ -181,6 +210,38 @@ client.on('interactionCreate', async interaction => {
         await interaction.deferReply({ ephemeral: true });
         const code = await sendWebhook(state.webhook, '✅ Webhook test from MM2 Sniper bot.');
         return interaction.followUp({ content: `Webhook responded with HTTP \`${code}\`.`, ephemeral: true });
+    }
+
+    if (commandName === 'whitelist') {
+        const user = interaction.options.getUser('user');
+        if (state.whitelist.includes(user.id)) {
+            return interaction.reply({ content: `\`${user.username}\` is already whitelisted.`, ephemeral: true });
+        }
+        state.whitelist.push(user.id);
+        saveState(state);
+        return interaction.reply({ content: `✅ \`${user.username}\` added to whitelist.`, ephemeral: true });
+    }
+
+    if (commandName === 'removewhitelist') {
+        const user = interaction.options.getUser('user');
+        if (!state.whitelist.includes(user.id)) {
+            return interaction.reply({ content: `\`${user.username}\` is not whitelisted.`, ephemeral: true });
+        }
+        state.whitelist = state.whitelist.filter(id => id !== user.id);
+        saveState(state);
+        return interaction.reply({ content: `✅ \`${user.username}\` removed from whitelist.`, ephemeral: true });
+    }
+
+    if (commandName === 'whitelistshow') {
+        if (state.whitelist.length === 0) {
+            return interaction.reply({ content: 'Whitelist is empty — all users can run commands.', ephemeral: true });
+        }
+        const lines = state.whitelist.map(id => `<@${id}>`).join('\n');
+        const embed = new EmbedBuilder()
+            .setTitle(`Whitelist (${state.whitelist.length})`)
+            .setColor(0x57f287)
+            .setDescription(lines);
+        return interaction.reply({ embeds: [embed], ephemeral: true });
     }
 });
 
