@@ -11,7 +11,7 @@ import json
 import os
 
 # ── CONFIG ─────────────────────────────────────────────────────────────────────
-BOT_TOKEN = "MTU0ODY1NTAwNTc5MDExNzk4OQ.GykZnC.i7V4omuxWrfSRDUiyEo_OMWGb8X9oltAlaRzxA"
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 # ── BOT SETUP ──────────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
